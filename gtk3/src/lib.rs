@@ -1,27 +1,19 @@
 use gdk_sys::{
-    gdk_keyval_to_unicode, gdk_window_get_user_data, GdkColor, GdkEventKey, GdkWindow,
-    GDK_CONTROL_MASK, GDK_KEY_PRESS, GDK_MOD1_MASK, GDK_MOD2_MASK, GDK_MOD3_MASK, GDK_MOD4_MASK,
-    GDK_MOD5_MASK, GDK_SHIFT_MASK,
+    gdk_keyval_to_unicode, GdkEventKey, GdkWindow, GDK_CONTROL_MASK, GDK_KEY_PRESS, GDK_MOD1_MASK,
+    GDK_MOD2_MASK, GDK_MOD3_MASK, GDK_MOD4_MASK, GDK_MOD5_MASK, GDK_SHIFT_MASK,
 };
-use glib_sys::{g_malloc0, g_strcmp0, g_strdup, gboolean, gpointer, GType, GFALSE, GTRUE};
+use glib_sys::{g_strcmp0, gboolean, gpointer, GType, GFALSE, GTRUE};
 use gobject_sys::{
     g_object_new, g_object_ref, g_object_unref, g_signal_emit, g_signal_lookup,
-    g_type_check_class_cast, g_type_check_instance_cast, g_type_check_instance_is_a,
-    g_type_module_register_type, g_type_module_use, g_type_register_static, GObject, GObjectClass,
-    GTypeClass, GTypeInfo, GTypeInstance, GTypeModule, G_TYPE_OBJECT,
+    g_type_check_class_cast, g_type_check_instance_cast, g_type_module_register_type,
+    g_type_module_use, g_type_register_static, GObject, GObjectClass, GTypeClass, GTypeInfo,
+    GTypeInstance, GTypeModule, G_TYPE_OBJECT,
 };
-use gtk_sys::{
-    gtk_im_context_get_type, gtk_style_context_lookup_color, gtk_widget_get_style_context,
-    gtk_widget_get_type, gtk_window_get_type, GtkIMContext, GtkIMContextClass, GtkIMContextInfo,
-};
+use gtk_sys::{gtk_im_context_get_type, GtkIMContext, GtkIMContextClass, GtkIMContextInfo};
 use once_cell::sync::{Lazy, OnceCell};
-use pango_sys::PangoAttrList;
+use std::mem::{size_of, MaybeUninit};
 use std::os::raw::{c_char, c_int, c_uint};
 use std::ptr::{self, NonNull};
-use std::{
-    mem::{size_of, MaybeUninit},
-    os::raw::c_double,
-};
 
 use kime_engine::{Config, InputEngine, InputResult};
 
@@ -43,48 +35,9 @@ macro_rules! cs {
     };
 }
 
-const DEFAULT_HL_FG: GdkColor = GdkColor {
-    pixel: 0,
-    red: 0xffff,
-    green: 0xffff,
-    blue: 0xffff,
-};
-
-const DEFAULT_HL_BG: GdkColor = GdkColor {
-    pixel: 0,
-    red: 0x43ff,
-    green: 0xacff,
-    blue: 0xe8ff,
-};
-
-unsafe fn lookup_color(
-    context: *mut gtk_sys::GtkStyleContext,
-    name: *const c_char,
-) -> Option<GdkColor> {
-    let mut rgba = MaybeUninit::uninit();
-    if gtk_style_context_lookup_color(context, name, rgba.as_mut_ptr()) == GTRUE {
-        let rgba = rgba.assume_init();
-
-        fn convert_color(c: c_double) -> u16 {
-            (c.max(0.0).min(1.0) * u16::MAX as c_double) as u16
-        }
-
-        Some(GdkColor {
-            pixel: 0,
-            red: convert_color(rgba.red),
-            blue: convert_color(rgba.blue),
-            green: convert_color(rgba.green),
-        })
-    } else {
-        None
-    }
-}
-
 struct KimeIMSignals {
     commit: c_uint,
-    preedit_start: c_uint,
-    preedit_changed: c_uint,
-    preedit_end: c_uint,
+    delete_surrounding: c_uint,
 }
 
 impl KimeIMSignals {
@@ -93,11 +46,15 @@ impl KimeIMSignals {
 
         macro_rules! sig {
             ($($name:ident),+) => {
-                Self { $($name: g_signal_lookup(cs!(stringify!($name)), ty),)+ }
+                $(
+                    let $name = g_signal_lookup(cs!(stringify!($name)), ty);
+                    assert_ne!($name, 0);
+                )+
+                return Self { $($name,)+ };
             }
         }
 
-        sig!(commit, preedit_start, preedit_changed, preedit_end)
+        sig!(commit, delete_surrounding);
     }
 }
 
@@ -114,7 +71,7 @@ struct KimeIMContext {
     parent: GtkIMContext,
     client_window: Option<NonNull<GdkWindow>>,
     engine: InputEngine,
-    preedit_visible: bool,
+    preedit_state: bool,
 }
 
 impl KimeIMContext {
@@ -126,7 +83,6 @@ impl KimeIMContext {
         let code = match kime_engine::KeyCode::from_hardward_code(key.hardware_keycode) {
             Some(code) => code,
             None => {
-                self.reset();
                 return false;
             }
         };
@@ -136,85 +92,79 @@ impl KimeIMContext {
             &CONFIG,
         );
 
-        // dbg!(ret);
+        dbg!(ret);
 
         match ret {
             InputResult::Commit(c) => {
+                self.clear_preedit();
                 self.commit(c);
-                self.update_preedit(false);
                 true
             }
             InputResult::CommitCommit(f, s) => {
+                self.clear_preedit();
                 self.commit(f);
                 self.commit(s);
-                self.update_preedit(false);
                 true
             }
             InputResult::CommitBypass(c) => {
+                self.clear_preedit();
                 self.commit(c);
-                self.update_preedit(false);
                 false
             }
-            InputResult::CommitPreedit(c, _p) => {
+            InputResult::CommitPreedit(c, p) => {
+                self.clear_preedit();
                 self.commit(c);
-                self.update_preedit(true);
+                self.preedit(p);
                 true
             }
-            InputResult::Preedit(_p) => {
-                self.update_preedit(true);
+            InputResult::Preedit(p) => {
+                self.clear_preedit();
+                self.preedit(p);
                 true
             }
-            InputResult::ClearPreedit => {
-                self.update_preedit(false);
-                true
-            }
+            InputResult::ClearPreedit => false,
             InputResult::Bypass => false,
             InputResult::Consume => true,
         }
     }
 
     pub fn reset(&mut self) {
-        match self.engine.reset() {
-            Some(c) => {
-                self.commit(c);
-                self.update_preedit(false);
-            }
-            _ => {}
+        self.preedit_state = false;
+    }
+
+    pub fn preedit(&mut self, c: char) {
+        eprintln!("preedit: {}", c);
+        self.commit(c);
+        self.preedit_state = true;
+    }
+
+    pub fn clear_preedit(&mut self) {
+        if self.preedit_state {
+            self.preedit_state = false;
+            self.delete_surronding(-1, 1);
         }
     }
 
-    pub fn update_preedit(&mut self, visible: bool) {
-        if self.preedit_visible != visible {
-            self.preedit_visible = visible;
+    pub fn delete_surronding(&mut self, offset: c_int, count: c_uint) {
+        eprintln!("delete");
+        unsafe {
+            let mut return_value = MaybeUninit::<gboolean>::uninit();
+            g_signal_emit(
+                self.as_obj(),
+                SIGNALS.get().unwrap().delete_surrounding,
+                0,
+                offset,
+                count,
+                return_value.as_mut_ptr(),
+            );
 
-            if visible {
-                unsafe {
-                    g_signal_emit(self.as_obj(), SIGNALS.get().unwrap().preedit_start, 0);
-                }
-                unsafe {
-                    g_signal_emit(self.as_obj(), SIGNALS.get().unwrap().preedit_changed, 0);
-                }
-            } else {
-                unsafe {
-                    g_signal_emit(self.as_obj(), SIGNALS.get().unwrap().preedit_changed, 0);
-                }
-                unsafe {
-                    g_signal_emit(self.as_obj(), SIGNALS.get().unwrap().preedit_end, 0);
-                }
-            }
-        } else {
-            // visible update
-            if visible {
-                unsafe {
-                    g_signal_emit(self.as_obj(), SIGNALS.get().unwrap().preedit_changed, 0);
-                }
-            // invisible noop
-            } else {
-            }
+            eprintln!("ret: {}", return_value.assume_init());
         }
     }
 
     pub fn commit(&mut self, c: char) {
+        eprintln!("commit: {}", c);
+
         let mut buf = [0; 8];
         c.encode_utf8(&mut buf);
         unsafe {
@@ -248,20 +198,17 @@ unsafe fn register_module(module: *mut GTypeModule) {
         im_context_class.set_client_window = Some(set_client_window);
         im_context_class.filter_keypress = Some(filter_keypress);
         im_context_class.reset = Some(reset_im);
-        im_context_class.get_preedit_string = Some(get_preedit_string);
         im_context_class.focus_in = Some(focus_in);
         im_context_class.focus_out = Some(focus_out);
         im_context_class.set_cursor_location = None;
         im_context_class.set_use_preedit = None;
-        im_context_class.set_surrounding = None;
 
         SIGNALS.get_or_init(|| KimeIMSignals::new(class));
 
         (*gobject_class).finalize = Some(im_context_instance_finalize);
     }
 
-    unsafe extern "C" fn focus_in(_ctx: *mut GtkIMContext) {
-    }
+    unsafe extern "C" fn focus_in(_ctx: *mut GtkIMContext) {}
 
     unsafe extern "C" fn focus_out(ctx: *mut GtkIMContext) {
         reset_im(ctx);
@@ -295,6 +242,8 @@ unsafe fn register_module(module: *mut GTypeModule) {
         } else if ctx.filter_keypress(key) {
             GTRUE
         } else {
+            ctx.reset();
+
             if CONFIG.gtk_commit_english {
                 let c = std::char::from_u32_unchecked(gdk_keyval_to_unicode(key.keyval));
 
@@ -305,79 +254,6 @@ unsafe fn register_module(module: *mut GTypeModule) {
             }
 
             GFALSE
-        }
-    }
-
-    unsafe extern "C" fn get_preedit_string(
-        ctx: *mut GtkIMContext,
-        out: *mut *mut c_char,
-        attrs: *mut *mut PangoAttrList,
-        cursor_pos: *mut c_int,
-    ) {
-        let ctx = ctx.cast::<KimeIMContext>().as_mut().unwrap();
-        let ch = ctx.engine.preedit_char();
-        let mut str_len = 0;
-
-        if !out.is_null() {
-            // Noting to display
-            if ch == '\0' {
-                if !cursor_pos.is_null() {
-                    cursor_pos.write(0);
-                }
-                out.write(g_strdup(cs!("")));
-            } else {
-                if !cursor_pos.is_null() {
-                    cursor_pos.write(1);
-                }
-                str_len = ch.len_utf8();
-                let s = g_malloc0(str_len + 1).cast::<c_char>();
-                ch.encode_utf8(std::slice::from_raw_parts_mut(s.cast(), str_len));
-                s.add(str_len).write(0);
-                out.write(s);
-            }
-        }
-
-        if !attrs.is_null() {
-            attrs.write(pango_sys::pango_attr_list_new());
-
-            if !out.is_null() && ch != '\0' {
-                let attr = pango_sys::pango_attr_underline_new(pango_sys::PANGO_UNDERLINE_SINGLE);
-                (*attr).start_index = 0;
-                (*attr).end_index = str_len as _;
-                pango_sys::pango_attr_list_insert(attrs.read(), attr);
-
-                if let Some(window) = ctx.client_window {
-                    let mut widget = MaybeUninit::uninit();
-                    gdk_window_get_user_data(window.as_ptr(), widget.as_mut_ptr());
-                    let widget = widget.assume_init();
-
-                    if g_type_check_instance_is_a(widget.cast(), gtk_widget_get_type()) == GTRUE
-                        && g_type_check_instance_is_a(widget.cast(), gtk_window_get_type())
-                            == GFALSE
-                    {
-                        let widget = widget.cast();
-                        let style_ctx = gtk_widget_get_style_context(widget);
-
-                        let fg = lookup_color(style_ctx, cs!("theme_selected_fg_color"))
-                            .unwrap_or(DEFAULT_HL_FG);
-                        let bg = lookup_color(style_ctx, cs!("theme_selected_bg_color"))
-                            .unwrap_or(DEFAULT_HL_BG);
-
-                        let fg_attr =
-                            pango_sys::pango_attr_foreground_new(fg.red, fg.green, fg.blue);
-                        (*fg_attr).start_index = 0;
-                        (*fg_attr).end_index = str_len as _;
-
-                        let bg_attr =
-                            pango_sys::pango_attr_background_new(bg.red, bg.green, bg.blue);
-                        (*bg_attr).start_index = 0;
-                        (*bg_attr).end_index = str_len as _;
-
-                        pango_sys::pango_attr_list_insert(attrs.read(), fg_attr);
-                        pango_sys::pango_attr_list_insert(attrs.read(), bg_attr);
-                    }
-                }
-            }
         }
     }
 
@@ -407,7 +283,7 @@ unsafe fn register_module(module: *mut GTypeModule) {
             parent: parent.read(),
             client_window: None,
             engine: InputEngine::new(),
-            preedit_visible: false,
+            preedit_state: false,
         });
     }
 

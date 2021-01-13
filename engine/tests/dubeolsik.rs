@@ -30,16 +30,6 @@ fn esc() {
 }
 
 #[test]
-fn arrow() {
-    test_input(&[
-        (Key::normal(R), InputResult::Preedit('ㄱ')),
-        (Key::normal(LeftArrow), InputResult::CommitBypass('ㄱ')),
-        (Key::normal(A), InputResult::Preedit('ㅁ')),
-        (Key::normal(RightArrow), InputResult::CommitBypass('ㅁ')),
-    ]);
-}
-
-#[test]
 fn issue_28() {
     test_input(&[
         (Key::normal(K), InputResult::Preedit('ㅏ')),
@@ -118,7 +108,7 @@ fn backspace() {
         (Key::normal(Backspace), InputResult::Preedit('갑')),
         (Key::normal(Backspace), InputResult::Preedit('가')),
         (Key::normal(Backspace), InputResult::Preedit('ㄱ')),
-        (Key::normal(Backspace), InputResult::ClearPreedit),
+        (Key::normal(Backspace), InputResult::PreeditEnd),
         (Key::normal(R), InputResult::Preedit('ㄱ')),
     ])
 }
