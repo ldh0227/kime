@@ -1,9 +1,9 @@
 use gobject_sys::g_signal_connect_data;
 use kimed_types::IndicatorMessage;
 use libappindicator_sys::*;
+use std::ffi::CString;
 use std::path::Path;
 use std::ptr;
-use std::{ffi::CString, io::BufRead};
 
 const HAN_ICON: &str = "kime-han-64x64.png";
 const ENG_ICON: &str = "kime-eng-64x64.png";

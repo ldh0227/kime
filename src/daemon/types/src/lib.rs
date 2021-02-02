@@ -48,21 +48,22 @@ pub fn deserialize_from<R: DeserializeOwned>(mut r: impl Read) -> bincode::Resul
     bincode::deserialize(&buf)
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum IndicatorMessage {
     UpdateHangulState(bool),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum WindowMessage {
     SpawnPreeditWindow { x: u32, y: u32, ch: char },
+    RemovePreeditWindow,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ClientRequest {
     GetGlobalHangulState,
-    UpdateHangulState(bool),
-    SpawnPreeditWindow { x: u32, y: u32, ch: char },
+    Indicator(IndicatorMessage),
+    Window(WindowMessage),
 }
 
 #[derive(Serialize, Deserialize)]

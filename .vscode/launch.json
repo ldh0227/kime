@@ -27,6 +27,19 @@
         {
             "type": "lldb",
             "request": "launch",
+            "name": "Daemon",
+            "cargo": {
+                "args": [
+                    "build",
+                    "-p=kimed"
+                ]
+            },
+            "program": "${cargo:program}",
+            "args": ["--not-daemon"]
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
             "name": "Cargo launch",
             "cargo": {
                 "args": [

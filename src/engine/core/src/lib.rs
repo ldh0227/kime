@@ -7,7 +7,7 @@ mod state;
 use self::characters::KeyValue;
 use self::state::CharacterState;
 use ahash::AHashMap;
-use kimed_types::{ClientRequest, GetGlobalHangulStateReply};
+use kimed_types::{ClientRequest, GetGlobalHangulStateReply, IndicatorMessage, WindowMessage};
 
 pub use self::config::{Config, RawConfig};
 pub use self::input_result::{InputResult, InputResultType};
@@ -45,6 +45,15 @@ pub struct InputEngine {
     state: CharacterState,
     daemon: Option<UnixStream>,
     enable_hangul: bool,
+    prev_preedit: Option<(u32, u32, char)>,
+}
+
+impl Drop for InputEngine {
+    fn drop(&mut self) {
+        if self.prev_preedit.take().is_some() {
+            self.remove_preedit();
+        }
+    }
 }
 
 impl Default for InputEngine {
@@ -59,6 +68,7 @@ impl InputEngine {
             state: CharacterState::default(),
             daemon: UnixStream::connect("/tmp/kimed.sock").ok(),
             enable_hangul: false,
+            prev_preedit: None,
         }
     }
 
@@ -86,11 +96,46 @@ impl InputEngine {
         self.enable_hangul
     }
 
-    pub fn update_hangul_state(&mut self) {
+    pub fn focus_out(&mut self) {
+        if self.prev_preedit.is_some() {
+            self.remove_preedit();
+        }
+    }
+
+    pub fn focus_in(&mut self) {
+        if let Some((x, y, ch)) = self.prev_preedit {
+            self.update_preedit(x, y, ch);
+        }
+        self.update_hangul_state();
+    }
+
+    pub fn remove_preedit(&mut self) {
+        self.prev_preedit = None;
+        if let Some(daemon) = self.daemon.as_ref() {
+            kimed_types::serialize_into(
+                daemon,
+                ClientRequest::Window(WindowMessage::RemovePreeditWindow),
+            )
+            .ok();
+        }
+    }
+
+    pub fn update_preedit(&mut self, x: u32, y: u32, ch: char) {
+        self.prev_preedit = Some((x, y, ch));
+        if let Some(daemon) = self.daemon.as_ref() {
+            kimed_types::serialize_into(
+                daemon,
+                ClientRequest::Window(WindowMessage::SpawnPreeditWindow { x, y, ch }),
+            )
+            .ok();
+        }
+    }
+
+    fn update_hangul_state(&mut self) {
         if let Some(daemon) = self.daemon.as_mut() {
             kimed_types::serialize_into(
                 daemon,
-                ClientRequest::UpdateHangulState(self.enable_hangul),
+                ClientRequest::Indicator(IndicatorMessage::UpdateHangulState(self.enable_hangul)),
             )
             .ok();
         }
@@ -99,6 +144,7 @@ impl InputEngine {
     pub fn press_key(&mut self, key: Key, config: &Config) -> InputResult {
         if config.hangul_keys.contains(&key) {
             self.enable_hangul = !self.enable_hangul;
+            self.update_hangul_state();
             InputResult::toggle_hangul()
         } else if key.code == KeyCode::Shift {
             // Don't reset state

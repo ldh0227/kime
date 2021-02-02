@@ -22,12 +22,33 @@ pub unsafe extern "C" fn kime_engine_is_hangul_enabled(engine: *const InputEngin
     engine.is_hangul_enabled().into()
 }
 
-/// Update hangul state
 #[no_mangle]
-pub unsafe extern "C" fn kime_engine_update_hangul_state(engine: *mut InputEngine) {
+pub unsafe extern "C" fn kime_engine_focus_in(engine: *mut InputEngine) {
     let engine = engine.as_mut().unwrap();
+    engine.focus_in();
+}
 
-    engine.update_hangul_state();
+#[no_mangle]
+pub unsafe extern "C" fn kime_engine_focus_out(engine: *mut InputEngine) {
+    let engine = engine.as_mut().unwrap();
+    engine.focus_out();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn kime_engine_update_preedit(
+    engine: *mut InputEngine,
+    x: u32,
+    y: u32,
+    ch: u32,
+) {
+    let engine = engine.as_mut().unwrap();
+    engine.update_preedit(x, y, std::char::from_u32(ch).unwrap());
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn kime_engine_remove_preedit(engine: *mut InputEngine) {
+    let engine = engine.as_mut().unwrap();
+    engine.remove_preedit();
 }
 
 /// Get preedit_char of engine
@@ -81,23 +102,4 @@ pub extern "C" fn kime_config_load() -> *mut Config {
 #[no_mangle]
 pub unsafe extern "C" fn kime_config_delete(config: *mut Config) {
     drop(Box::from_raw(config));
-}
-
-/// Get xim_preedit_font config
-/// name only valid while config is live
-///
-/// ## Return
-///
-/// utf-8 string when len
-#[no_mangle]
-pub unsafe extern "C" fn kime_config_xim_preedit_font(
-    config: *const Config,
-    name: *mut *const u8,
-    len: *mut usize,
-    font_size: *mut f64,
-) {
-    let (ref font, size) = config.as_ref().unwrap().xim_preedit_font;
-    name.write(font.as_ptr());
-    len.write(font.len());
-    font_size.write(size);
 }

@@ -123,11 +123,12 @@ impl KimeContext {
             }
             ImEvent::Done => {
                 if !self.current_state.activate && self.pending_state.activate {
-                    self.engine.update_hangul_state();
+                    self.engine.focus_in();
                     let kb = self.im.grab_keyboard();
                     kb.assign(filter.clone());
                     self.grab_kb = Some(kb);
                 } else if !self.current_state.deactivate && self.pending_state.deactivate {
+                    self.engine.focus_out();
                     if let Some(c) = self.engine.reset() {
                         self.commit_ch(c);
                         self.commit();
@@ -164,9 +165,7 @@ impl KimeContext {
                     log::trace!("ret: {:#?}", ret);
 
                     match ret.ty {
-                        InputResultType::ToggleHangul => {
-                            self.engine.update_hangul_state();
-                        }
+                        InputResultType::ToggleHangul => {}
                         InputResultType::Bypass => bypass = true,
                         InputResultType::CommitBypass => {
                             self.commit_ch(ret.char1);

@@ -89,8 +89,16 @@ extern "C" {
     pub fn kime_engine_is_hangul_enabled(engine: *const InputEngine) -> u32;
 }
 extern "C" {
-    #[doc = " Update hangul state"]
-    pub fn kime_engine_update_hangul_state(engine: *mut InputEngine);
+    pub fn kime_engine_focus_in(engine: *mut InputEngine);
+}
+extern "C" {
+    pub fn kime_engine_focus_out(engine: *mut InputEngine);
+}
+extern "C" {
+    pub fn kime_engine_update_preedit(engine: *mut InputEngine, x: u32, y: u32, ch: u32);
+}
+extern "C" {
+    pub fn kime_engine_remove_preedit(engine: *mut InputEngine);
 }
 extern "C" {
     #[doc = " Get preedit_char of engine"]

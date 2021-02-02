@@ -21,6 +21,16 @@ pub struct InputResult {
     pub char2: u32,
 }
 
+impl InputResult {
+    pub unsafe fn preedit_ch(self) -> char {
+        match self.ty {
+            InputResultType::CommitPreedit => std::char::from_u32_unchecked(self.char2),
+            InputResultType::Preedit => std::char::from_u32_unchecked(self.char1),
+            _ => '\0',
+        }
+    }
+}
+
 impl fmt::Debug for InputResult {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("InputResult")

@@ -36,8 +36,20 @@ impl InputEngine {
         unsafe { ffi::kime_engine_is_hangul_enabled(self.engine) != 0 }
     }
 
-    pub fn update_hangul_state(&self) {
-        unsafe { ffi::kime_engine_update_hangul_state(self.engine) }
+    pub fn update_preedit(&mut self, x: u32, y: u32, ch: char) {
+        unsafe { ffi::kime_engine_update_preedit(self.engine, x, y, ch as u32) }
+    }
+
+    pub fn remove_preedit(&mut self) {
+        unsafe { ffi::kime_engine_remove_preedit(self.engine) }
+    }
+
+    pub fn focus_in(&mut self) {
+        unsafe { ffi::kime_engine_focus_in(self.engine) }
+    }
+
+    pub fn focus_out(&mut self) {
+        unsafe { ffi::kime_engine_focus_out(self.engine) }
     }
 
     pub fn press_key(

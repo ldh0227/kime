@@ -48,10 +48,13 @@ void kime_engine_delete(struct InputEngine *engine);
  */
 uint32_t kime_engine_is_hangul_enabled(const struct InputEngine *engine);
 
-/**
- * Update hangul state
- */
-void kime_engine_update_hangul_state(struct InputEngine *engine);
+void kime_engine_focus_in(struct InputEngine *engine);
+
+void kime_engine_focus_out(struct InputEngine *engine);
+
+void kime_engine_update_preedit(struct InputEngine *engine, uint32_t x, uint32_t y, uint32_t ch);
+
+void kime_engine_remove_preedit(struct InputEngine *engine);
 
 /**
  * Get preedit_char of engine

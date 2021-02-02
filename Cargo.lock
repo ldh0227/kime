@@ -124,27 +124,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b700ce4376041dcd0a327fd0097c41095743c4c8af8887265942faf1100bd040"
 
 [[package]]
-name = "cairo-rs"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5c0f2e047e8ca53d0ff249c54ae047931d7a6ebe05d00af73e0ffeb6e34bdb8"
-dependencies = [
- "bitflags",
- "cairo-sys-rs",
- "glib",
- "glib-sys",
- "gobject-sys",
- "libc",
- "thiserror",
-]
-
-[[package]]
 name = "cairo-sys-rs"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ed2639b9ad5f1d6efa76de95558e11339e7318426d84ac4890b86c03e828ca7"
 dependencies = [
- "glib-sys",
  "libc",
  "system-deps",
 ]
@@ -588,6 +572,9 @@ dependencies = [
 [[package]]
 name = "kime-engine-cffi"
 version = "0.8.1"
+dependencies = [
+ "kime-engine-capi",
+]
 
 [[package]]
 name = "kime-engine-core"
@@ -649,7 +636,6 @@ name = "kime-xim"
 version = "0.2.0"
 dependencies = [
  "ahash",
- "cairo-rs",
  "kime-engine-cffi",
  "kime-version",
  "log",
@@ -1620,7 +1606,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4122702a684f01cf35cf8e00d0ba513f7c4c7d46f9881d9a699f3de787e61e4"
 dependencies = [
  "gethostname",
- "libc",
  "nix 0.19.1",
  "winapi",
  "winapi-wsapoll",

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use kimed_types::{ClientRequest, GetGlobalHangulStateReply, IndicatorMessage, WindowMessage};
+use kimed_types::{ClientRequest, GetGlobalHangulStateReply, IndicatorMessage};
 use std::{
     fs::File,
     process::{Child, Command, Stdio},
@@ -23,7 +23,11 @@ static CONTEXT: Mutex<ServerContext> = Mutex::const_new(ServerContext {
 
 async fn serve_engine(mut stream: UnixStream) -> Result<()> {
     loop {
-        match kimed_types::async_deserialize_from(&mut stream).await? {
+        let req = kimed_types::async_deserialize_from(&mut stream).await?;
+
+        log::trace!("client req: {:?}", req);
+
+        match req {
             ClientRequest::GetGlobalHangulState => {
                 kimed_types::async_serialize_into(
                     &mut stream,
@@ -31,8 +35,10 @@ async fn serve_engine(mut stream: UnixStream) -> Result<()> {
                 )
                 .await?;
             }
-            ClientRequest::UpdateHangulState(state) => {
+            ClientRequest::Indicator(IndicatorMessage::UpdateHangulState(state)) => {
+                log::trace!("Update hangul: {}", state);
                 let mut ctx = CONTEXT.lock().await;
+
                 if ctx.global_hangul_state != state {
                     ctx.global_hangul_state = state;
                     if let Some(indicator_client) =
@@ -45,15 +51,12 @@ async fn serve_engine(mut stream: UnixStream) -> Result<()> {
                     }
                 }
             }
-            ClientRequest::SpawnPreeditWindow { x, y, ch } => {
+            ClientRequest::Window(msg) => {
                 let mut ctx = CONTEXT.lock().await;
                 if let Some(window_client) =
                     ctx.window_client.as_mut().and_then(|c| c.stdin.as_mut())
                 {
-                    kimed_types::serialize_into(
-                        window_client,
-                        WindowMessage::SpawnPreeditWindow { x, y, ch },
-                    )?;
+                    kimed_types::serialize_into(window_client, msg)?;
                 }
             }
         }
