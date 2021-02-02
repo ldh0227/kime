@@ -1,169 +1,98 @@
 use anyhow::Result;
-use gobject_sys::g_signal_connect_data;
-use kimed_types::{bincode, ClientMessage, GetGlobalHangulStateReply};
-use libappindicator_sys::{AppIndicator, AppIndicatorStatus_APP_INDICATOR_STATUS_ACTIVE};
-use std::ffi::CString;
+use kimed_types::{
+    ClientHello, ClientRequest, GetGlobalHangulStateReply, IndicatorMessage, WindowMessage,
+};
 use std::fs::File;
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
-use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use structopt::StructOpt;
+use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::Mutex;
 
-macro_rules! cs {
-    ($ex:expr) => {
-        concat!($ex, "\0").as_ptr().cast()
-    };
+#[derive(Default)]
+pub struct ServerContext {
+    global_hangul_state: bool,
+    indicator_client: Option<UnixStream>,
+    window_client: Option<UnixStream>,
 }
 
-const HAN_ICON: &str = "kime-han-64x64.png";
-const ENG_ICON: &str = "kime-eng-64x64.png";
+static CONTEXT: Mutex<ServerContext> = Mutex::const_new(ServerContext {
+    global_hangul_state: false,
+    indicator_client: None,
+    window_client: None,
+});
 
-struct Indicator {
-    indicator: *mut AppIndicator,
-}
-
-impl Indicator {
-    pub fn new() -> Self {
-        unsafe fn set_icon_path(indicator: *mut AppIndicator, path: &Path) {
-            let s = path.to_str().unwrap();
-            let s = CString::new(s).unwrap();
-            libappindicator_sys::app_indicator_set_icon_theme_path(indicator, s.as_ptr());
-        }
-
-        unsafe {
-            let m = gtk_sys::gtk_menu_new();
-            let mi = gtk_sys::gtk_check_menu_item_new_with_label(cs!("Exit"));
-            unsafe extern "C" fn exit() {
-                gtk_sys::gtk_main_quit();
-            }
-            g_signal_connect_data(
-                mi.cast(),
-                cs!("activate"),
-                Some(exit),
-                ptr::null_mut(),
-                None,
-                0,
-            );
-            gtk_sys::gtk_menu_shell_append(m.cast(), mi.cast());
-            let icon_dirs = xdg::BaseDirectories::with_profile("kime", "icons").unwrap();
-            let indicator = libappindicator_sys::app_indicator_new(
-                cs!("kime"),
-                cs!(""),
-                libappindicator_sys::AppIndicatorCategory_APP_INDICATOR_CATEGORY_APPLICATION_STATUS,
-            );
-            let han = icon_dirs.find_data_file(HAN_ICON).unwrap();
-            let eng = icon_dirs.find_data_file(ENG_ICON).unwrap();
-            set_icon_path(indicator, han.parent().unwrap());
-            set_icon_path(indicator, eng.parent().unwrap());
-            libappindicator_sys::app_indicator_set_status(
-                indicator,
-                AppIndicatorStatus_APP_INDICATOR_STATUS_ACTIVE,
-            );
-            libappindicator_sys::app_indicator_set_menu(indicator, m.cast());
-            gtk_sys::gtk_widget_show_all(m);
-            Self { indicator }
-        }
-    }
-
-    pub fn enable_hangul(&mut self) {
-        unsafe {
-            libappindicator_sys::app_indicator_set_icon_full(
-                self.indicator,
-                cs!("kime-han-64x64"),
-                cs!("icon"),
-            );
-        }
-    }
-
-    pub fn disable_hangul(&mut self) {
-        unsafe {
-            libappindicator_sys::app_indicator_set_icon_full(
-                self.indicator,
-                cs!("kime-eng-64x64"),
-                cs!("icon"),
-            );
-        }
-    }
-}
-
-static GLOBAL_HANGUL_STATE: AtomicBool = AtomicBool::new(false);
-
-fn serve_client(mut stream: UnixStream, indicator_tx: glib::SyncSender<bool>) -> Result<()> {
+async fn serve_engine(mut stream: UnixStream) -> Result<()> {
     loop {
-        match bincode::deserialize_from(&mut stream)? {
-            ClientMessage::GetGlobalHangulState => {
-                bincode::serialize_into(
+        match kimed_types::async_deserialize_from(&mut stream).await? {
+            ClientRequest::GetGlobalHangulState => {
+                kimed_types::async_serialize_into(
                     &mut stream,
-                    &GetGlobalHangulStateReply {
-                        state: GLOBAL_HANGUL_STATE.load(Relaxed),
-                    },
-                )?;
+                    GetGlobalHangulStateReply(CONTEXT.lock().await.global_hangul_state),
+                )
+                .await?;
             }
-            ClientMessage::UpdateHangulState(state) => {
-                GLOBAL_HANGUL_STATE.store(state, Relaxed);
-
-                if indicator_tx.send(state).is_err() {
-                    break Ok(());
+            ClientRequest::UpdateHangulState(state) => {
+                let mut ctx = CONTEXT.lock().await;
+                if ctx.global_hangul_state != state {
+                    ctx.global_hangul_state = state;
+                    if let Some(indicator_client) = ctx.indicator_client.as_mut() {
+                        kimed_types::async_serialize_into(
+                            indicator_client,
+                            IndicatorMessage::UpdateHangulState(state),
+                        )
+                        .await?;
+                    }
+                }
+            }
+            ClientRequest::SpawnPreeditWindow { x, y, ch } => {
+                let mut ctx = CONTEXT.lock().await;
+                if let Some(window_client) = ctx.window_client.as_mut() {
+                    kimed_types::async_serialize_into(
+                        window_client,
+                        WindowMessage::SpawnPreeditWindow { x, y, ch },
+                    )
+                    .await?;
                 }
             }
         }
     }
 }
 
-fn daemon_main() -> Result<()> {
-    unsafe {
-        gtk_sys::gtk_init(ptr::null_mut(), ptr::null_mut());
+async fn daemon_main() -> Result<()> {
+    let path = std::path::Path::new("/tmp/kimed.sock");
+
+    if path.exists() {
+        std::fs::remove_file(path).ok();
     }
 
-    let mut indicator = Indicator::new();
+    let server = UnixListener::bind(path).unwrap();
 
-    indicator.disable_hangul();
-
-    let (indicator_tx, indicator_rx) =
-        glib::MainContext::sync_channel(glib::PRIORITY_DEFAULT_IDLE, 10);
-
-    let ctx = glib::MainContext::ref_thread_default();
-
-    assert!(ctx.acquire());
-
-    indicator_rx.attach(Some(&ctx), move |msg| {
-        if msg {
-            indicator.enable_hangul();
-        } else {
-            indicator.disable_hangul();
-        }
-
-        glib::Continue(true)
-    });
-
-    ctx.release();
-
-    std::thread::spawn(move || {
-        let path = std::path::Path::new("/tmp/kimed.sock");
-        if path.exists() {
-            std::fs::remove_file(path).ok();
-        }
-
-        let server = UnixListener::bind(path).unwrap();
-
-        loop {
-            let (stream, _addr) = server.accept().expect("Accept");
-            log::info!("Connect client");
-            let tx = indicator_tx.clone();
-            std::thread::spawn(move || {
-                if let Err(err) = serve_client(stream, tx) {
-                    log::error!("Client Error: {}", err);
+    loop {
+        let (mut stream, _addr) = server.accept().await.expect("Accept");
+        log::info!("Connect client");
+        tokio::spawn(async move {
+            match kimed_types::async_deserialize_from(&mut stream).await {
+                Ok(hello) => match hello {
+                    ClientHello::Window => {
+                        log::info!("Register window client");
+                        CONTEXT.lock().await.window_client = Some(stream);
+                    }
+                    ClientHello::Indicator => {
+                        log::info!("Register indicator client");
+                        CONTEXT.lock().await.indicator_client = Some(stream);
+                    }
+                    ClientHello::Engine => {
+                        log::info!("Register engine client");
+                        if let Err(err) = serve_engine(stream).await {
+                            log::error!("Client error: {}", err);
+                        }
+                    }
+                },
+                Err(err) => {
+                    log::error!("Hello failed: {}", err);
                 }
-            });
-        }
-    });
-
-    unsafe {
-        gtk_sys::gtk_main();
+            }
+        });
     }
-
-    Ok(())
 }
 
 #[derive(StructOpt)]
@@ -208,7 +137,13 @@ fn main() {
     )
     .ok();
     log::info!("Start daemon");
-    match daemon_main() {
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .build()
+        .expect("Make tokio runtime");
+
+    match rt.block_on(daemon_main()) {
         Ok(_) => {}
         Err(err) => {
             log::error!("Error: {}", err);

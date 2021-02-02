@@ -7,7 +7,7 @@ mod state;
 use self::characters::KeyValue;
 use self::state::CharacterState;
 use ahash::AHashMap;
-use kimed_types::bincode;
+use kimed_types::{ClientHello, ClientRequest, GetGlobalHangulStateReply};
 
 pub use self::config::{Config, RawConfig};
 pub use self::input_result::{InputResult, InputResultType};
@@ -57,7 +57,12 @@ impl InputEngine {
     pub fn new() -> Self {
         Self {
             state: CharacterState::default(),
-            daemon: UnixStream::connect("/tmp/kimed.sock").ok(),
+            daemon: UnixStream::connect("/tmp/kimed.sock")
+                .ok()
+                .and_then(|stream| {
+                    kimed_types::serialize_into(&stream, ClientHello::Engine).ok()?;
+                    Some(stream)
+                }),
             enable_hangul: false,
         }
     }
@@ -74,16 +79,11 @@ impl InputEngine {
         if config.global_hangul_state {
             self.enable_hangul = self
                 .daemon
-                .as_mut()
-                .and_then(|mut d| {
-                    bincode::serialize_into(
-                        &mut d,
-                        &kimed_types::ClientMessage::GetGlobalHangulState,
-                    )
-                    .unwrap();
-                    let reply: kimed_types::GetGlobalHangulStateReply =
-                        bincode::deserialize_from(&mut d).ok()?;
-                    Some(reply.state)
+                .as_ref()
+                .and_then(|d| {
+                    kimed_types::serialize_into(d, ClientRequest::GetGlobalHangulState).ok()?;
+                    let reply: GetGlobalHangulStateReply = kimed_types::deserialize_from(d).ok()?;
+                    Some(reply.0)
                 })
                 .unwrap_or(self.enable_hangul);
         }
@@ -93,11 +93,11 @@ impl InputEngine {
 
     pub fn update_hangul_state(&mut self) {
         if let Some(daemon) = self.daemon.as_mut() {
-            bincode::serialize_into(
+            kimed_types::serialize_into(
                 daemon,
-                &kimed_types::ClientMessage::UpdateHangulState(self.enable_hangul),
+                ClientRequest::UpdateHangulState(self.enable_hangul),
             )
-            .unwrap();
+            .ok();
         }
     }
 

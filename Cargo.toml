@@ -2,6 +2,8 @@
 members = [
     "src/daemon/kimed",
     "src/daemon/types",
+    "src/daemon/indicator",
+    "src/daemon/window",
 
     "src/engine/core",
     "src/engine/capi",

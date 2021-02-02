@@ -1,0 +1,14 @@
+[package]
+name = "kime-indicator"
+version = "0.1.0"
+authors = ["Riey <creeper844@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+kimed-types = { path = "../types" }
+
+glib = "0.10.3"
+gobject-sys = "0.10.0"
+gtk-sys = "0.10.0"
+libappindicator-sys = "0.5.0"
+xdg = "2.2.0"
