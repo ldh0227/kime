@@ -1,10 +1,9 @@
 use gobject_sys::g_signal_connect_data;
-use kimed_types::{deserialize_from, serialize_into, ClientHello, IndicatorMessage};
+use kimed_types::IndicatorMessage;
 use libappindicator_sys::*;
-use std::ffi::CString;
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::ptr;
+use std::{ffi::CString, io::BufRead};
 
 const HAN_ICON: &str = "kime-han-64x64.png";
 const ENG_ICON: &str = "kime-eng-64x64.png";
@@ -92,24 +91,14 @@ fn main() {
         glib::MainContext::sync_channel(glib::PRIORITY_DEFAULT_IDLE, 10);
 
     std::thread::spawn(move || {
-        let path = Path::new("/tmp/kimed.sock");
-
-        while !path.exists() {
-            std::thread::sleep(std::time::Duration::from_millis(600));
-        }
-
-        let conn = UnixStream::connect(path).unwrap();
-
-        serialize_into(&conn, ClientHello::Indicator).unwrap();
+        let stdin = std::io::stdin();
+        let mut stdin = stdin.lock();
 
         loop {
-            let msg = deserialize_from(&conn).unwrap();
-
+            let msg = kimed_types::deserialize_from(&mut stdin).unwrap();
             match msg {
                 IndicatorMessage::UpdateHangulState(state) => {
-                    if indicator_tx.send(state).is_err() {
-                        return;
-                    }
+                    indicator_tx.send(state).unwrap();
                 }
             }
         }

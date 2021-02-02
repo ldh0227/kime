@@ -49,13 +49,6 @@ pub fn deserialize_from<R: DeserializeOwned>(mut r: impl Read) -> bincode::Resul
 }
 
 #[derive(Serialize, Deserialize)]
-pub enum ClientHello {
-    Indicator,
-    Window,
-    Engine,
-}
-
-#[derive(Serialize, Deserialize)]
 pub enum IndicatorMessage {
     UpdateHangulState(bool),
 }

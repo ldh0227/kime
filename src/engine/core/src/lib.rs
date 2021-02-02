@@ -7,7 +7,7 @@ mod state;
 use self::characters::KeyValue;
 use self::state::CharacterState;
 use ahash::AHashMap;
-use kimed_types::{ClientHello, ClientRequest, GetGlobalHangulStateReply};
+use kimed_types::{ClientRequest, GetGlobalHangulStateReply};
 
 pub use self::config::{Config, RawConfig};
 pub use self::input_result::{InputResult, InputResultType};
@@ -57,12 +57,7 @@ impl InputEngine {
     pub fn new() -> Self {
         Self {
             state: CharacterState::default(),
-            daemon: UnixStream::connect("/tmp/kimed.sock")
-                .ok()
-                .and_then(|stream| {
-                    kimed_types::serialize_into(&stream, ClientHello::Engine).ok()?;
-                    Some(stream)
-                }),
+            daemon: UnixStream::connect("/tmp/kimed.sock").ok(),
             enable_hangul: false,
         }
     }

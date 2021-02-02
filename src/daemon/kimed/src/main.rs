@@ -1,8 +1,9 @@
 use anyhow::Result;
-use kimed_types::{
-    ClientHello, ClientRequest, GetGlobalHangulStateReply, IndicatorMessage, WindowMessage,
+use kimed_types::{ClientRequest, GetGlobalHangulStateReply, IndicatorMessage, WindowMessage};
+use std::{
+    fs::File,
+    process::{Child, Command, Stdio},
 };
-use std::fs::File;
 use structopt::StructOpt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
@@ -10,8 +11,8 @@ use tokio::sync::Mutex;
 #[derive(Default)]
 pub struct ServerContext {
     global_hangul_state: bool,
-    indicator_client: Option<UnixStream>,
-    window_client: Option<UnixStream>,
+    indicator_client: Option<Child>,
+    window_client: Option<Child>,
 }
 
 static CONTEXT: Mutex<ServerContext> = Mutex::const_new(ServerContext {
@@ -34,23 +35,25 @@ async fn serve_engine(mut stream: UnixStream) -> Result<()> {
                 let mut ctx = CONTEXT.lock().await;
                 if ctx.global_hangul_state != state {
                     ctx.global_hangul_state = state;
-                    if let Some(indicator_client) = ctx.indicator_client.as_mut() {
-                        kimed_types::async_serialize_into(
+                    if let Some(indicator_client) =
+                        ctx.indicator_client.as_mut().and_then(|c| c.stdin.as_mut())
+                    {
+                        kimed_types::serialize_into(
                             indicator_client,
                             IndicatorMessage::UpdateHangulState(state),
-                        )
-                        .await?;
+                        )?;
                     }
                 }
             }
             ClientRequest::SpawnPreeditWindow { x, y, ch } => {
                 let mut ctx = CONTEXT.lock().await;
-                if let Some(window_client) = ctx.window_client.as_mut() {
-                    kimed_types::async_serialize_into(
+                if let Some(window_client) =
+                    ctx.window_client.as_mut().and_then(|c| c.stdin.as_mut())
+                {
+                    kimed_types::serialize_into(
                         window_client,
                         WindowMessage::SpawnPreeditWindow { x, y, ch },
-                    )
-                    .await?;
+                    )?;
                 }
             }
         }
@@ -58,6 +61,23 @@ async fn serve_engine(mut stream: UnixStream) -> Result<()> {
 }
 
 async fn daemon_main() -> Result<()> {
+    {
+        let mut ctx = CONTEXT.lock().await;
+        let indicator = Command::new("kime-indicator")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .ok();
+
+        let window = Command::new("kime-window")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .ok();
+        ctx.indicator_client = indicator;
+        ctx.window_client = window;
+    }
+
     let path = std::path::Path::new("/tmp/kimed.sock");
 
     if path.exists() {
@@ -67,29 +87,11 @@ async fn daemon_main() -> Result<()> {
     let server = UnixListener::bind(path).unwrap();
 
     loop {
-        let (mut stream, _addr) = server.accept().await.expect("Accept");
+        let (stream, _addr) = server.accept().await.expect("Accept");
         log::info!("Connect client");
         tokio::spawn(async move {
-            match kimed_types::async_deserialize_from(&mut stream).await {
-                Ok(hello) => match hello {
-                    ClientHello::Window => {
-                        log::info!("Register window client");
-                        CONTEXT.lock().await.window_client = Some(stream);
-                    }
-                    ClientHello::Indicator => {
-                        log::info!("Register indicator client");
-                        CONTEXT.lock().await.indicator_client = Some(stream);
-                    }
-                    ClientHello::Engine => {
-                        log::info!("Register engine client");
-                        if let Err(err) = serve_engine(stream).await {
-                            log::error!("Client error: {}", err);
-                        }
-                    }
-                },
-                Err(err) => {
-                    log::error!("Hello failed: {}", err);
-                }
+            if let Err(err) = serve_engine(stream).await {
+                log::trace!("Client error: {}", err);
             }
         });
     }
