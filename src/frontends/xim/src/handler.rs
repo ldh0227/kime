@@ -63,12 +63,29 @@ impl KimeHandler {
         }
     }
 
+    fn preedit_draw(
+        &mut self,
+        server: &mut X11rbServer<XCBConnection>,
+        ic: &mut xim::InputContext<KimeData>,
+        ch: char,
+    ) -> Result<(), xim::ServerError> {
+        let mut buf = [0; 4];
+        let s = ch.encode_utf8(&mut buf);
+        server.preedit_update(ic, s)?;
+        Ok(())
+    }
+
     fn preedit(
         &mut self,
         server: &mut X11rbServer<XCBConnection>,
         ic: &mut xim::InputContext<KimeData>,
         ch: char,
     ) -> Result<(), xim::ServerError> {
+        if ic.input_style().contains(InputStyle::PREEDIT_CALLBACKS) {
+            self.preedit_draw(server, ic, ch)?;
+            return Ok(());
+        }
+
         if std::env::var("XDG_SESSION_TYPE")
             .map(|v| v == "wayland")
             .unwrap_or(false)
@@ -123,6 +140,11 @@ impl KimeHandler {
         server: &mut X11rbServer<XCBConnection>,
         ic: &mut xim::InputContext<KimeData>,
     ) -> Result<(), xim::ServerError> {
+        if ic.input_style().contains(InputStyle::PREEDIT_CALLBACKS) {
+            server.preedit_update(ic, "")?;
+            return Ok(());
+        }
+
         if let Some(pe) = ic.user_data.pe.take() {
             // off-the-spot draw in server
             if let Some(w) = self.preedit_windows.remove(&pe) {
@@ -167,7 +189,7 @@ impl KimeHandler {
 }
 
 impl ServerHandler<X11rbServer<XCBConnection>> for KimeHandler {
-    type InputStyleArray = [InputStyle; 3];
+    type InputStyleArray = [InputStyle; 4];
     type InputContextData = KimeData;
 
     fn new_ic_data(
@@ -184,7 +206,8 @@ impl ServerHandler<X11rbServer<XCBConnection>> for KimeHandler {
             InputStyle::PREEDIT_NOTHING | InputStyle::STATUS_NOTHING,
             InputStyle::PREEDIT_POSITION | InputStyle::STATUS_NOTHING,
             InputStyle::PREEDIT_POSITION | InputStyle::STATUS_NONE,
-            // // on-the-spot when enable this java awt doesn't work I don't know why
+            // on-the-spot
+            InputStyle::PREEDIT_CALLBACKS | InputStyle::STATUS_NOTHING,
         ]
     }
 
@@ -313,6 +336,7 @@ impl ServerHandler<X11rbServer<XCBConnection>> for KimeHandler {
             }
             InputResultType::CommitPreedit => {
                 self.commit(server, input_context, ret.char1)?;
+                self.clear_preedit(server, input_context)?;
                 self.preedit(server, input_context, ret.char2)?;
                 Ok(true)
             }
@@ -334,23 +358,6 @@ impl ServerHandler<X11rbServer<XCBConnection>> for KimeHandler {
             self.preedit_windows.remove(&pe).unwrap().clean(&*server)?;
         }
 
-        Ok(())
-    }
-
-    fn handle_preedit_start(
-        &mut self,
-        _server: &mut X11rbServer<XCBConnection>,
-        _input_context: &mut xim::InputContext<Self::InputContextData>,
-    ) -> Result<(), xim::ServerError> {
-        Ok(())
-    }
-
-    fn handle_caret(
-        &mut self,
-        _server: &mut X11rbServer<XCBConnection>,
-        _input_context: &mut xim::InputContext<Self::InputContextData>,
-        _position: i32,
-    ) -> Result<(), xim::ServerError> {
         Ok(())
     }
 
